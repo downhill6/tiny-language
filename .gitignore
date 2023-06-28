@@ -1,4 +1,5 @@
 a.out
 .DS_Store
 a.out.dSYM/
-.vscode/
+toy
+toy.dSYM/
