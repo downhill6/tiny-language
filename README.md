@@ -8,4 +8,14 @@ Learn [My First Language Frontend with LLVM Tutorial](https://llvm.org/docs/tuto
 
 ``` bash
 clang++ -g -O3 implementing-a-parser-and-ast.cpp `llvm-config --cxxflags`
+
+./a.out
+```
+
+**chapter 3**
+
+```bash
+clang++ -g -O3 code-generation-to-llvm.cpp `llvm-config --cxxflags --ldflags --system-libs --libs core` -o toy
+
+./toy
 ```
