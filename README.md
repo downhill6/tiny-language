@@ -19,3 +19,11 @@ clang++ -g -O3 code-generation-to-llvm.cpp `llvm-config --cxxflags --ldflags --s
 
 ./toy
 ```
+
+**chapter 4**
+
+```bash
+clang++ -g adding-jit-and-optimizer-support.cpp `llvm-config --cxxflags --ldflags --system-libs --libs core orcjit native` -O3 -o toy
+
+./toy
+```
