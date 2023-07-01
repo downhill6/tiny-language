@@ -27,3 +27,11 @@ clang++ -g adding-jit-and-optimizer-support.cpp `llvm-config --cxxflags --ldflag
 
 ./toy
 ```
+
+**chapter 5**
+
+```bash
+clang++ -g adding-control-flow.cpp `llvm-config --cxxflags --ldflags --system-libs --libs core orcjit native` -O3 -o toy
+
+./toy
+```

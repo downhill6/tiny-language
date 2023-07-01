@@ -199,6 +199,22 @@ namespace {
         Value *codegen() override;
     };
 
+    /// ForExprAST 表示 for/in 循环表达式，包括循环变量、起始值、结束值、步长和循环体等信息。
+    class ForExprAST : public ExprAST {
+        // VarName: 循环变量名，Start: 起始值，End: 结束值，Step: 步长，Body: 循环体
+        std::string VarName;
+        std::unique_ptr<ExprAST> Start, End, Step, Body;
+
+    public:
+        ForExprAST(const std::string &VarName, std::unique_ptr<ExprAST> Start,
+                    std::unique_ptr<ExprAST> End, std::unique_ptr<ExprAST> Step,
+                    std::unique_ptr<ExprAST> Body)
+            : VarName(VarName), Start(std::move(Start)), End(std::move(End)),
+                Step(std::move(Step)), Body(std::move(Body)) {}
+
+        Value *codegen() override;
+    };
+
     /// PrototypeAST 表示函数的声明，用于描述函数的基本信息，如函数名和参数等，但不包含函数体。
     /// 在编译器中，函数原型通常用于类型检查和链接过程，以便在代码中引用该函数时能够正确地进行类型匹配和链接。
     /// 在解释器中，函数原型可以用于动态加载函数，实现类似于动态链接库的功能。
@@ -378,6 +394,62 @@ static std::unique_ptr<ExprAST> ParseIfExpr() {
                                       std::move(Else));
 }
 
+/// forexpr ::= 'for' identifier '=' expr ',' expr (',' expr)? 'in' expression
+/// 解析 for/in 循环
+static std::unique_ptr<ExprAST> ParseForExpr() {
+    // 消耗掉 "for".
+    getNextToken();
+
+    if (CurTok != tok_identifier)
+        return LogError("expected identifier after for");
+
+    // 保存循环变量的名称
+    std::string IdName = IdentifierStr;
+    // 消耗掉循环变量的名称
+    getNextToken();
+
+    if (CurTok != '=')
+        return LogError("expected '=' after for");
+    // 消耗掉 '='.
+    getNextToken();
+
+    // 解析循环变量的初始值
+    auto Start = ParseExpression();
+    if (!Start)
+        return nullptr;
+    if (CurTok != ',')
+        return LogError("expected ',' after for start value");
+    getNextToken();
+
+    // 解析循环变量的结束值
+    auto End = ParseExpression();
+    if (!End)
+        return nullptr;
+
+    // The step value is optional.
+    // 解析循环变量的步长，如果有 "," 说明存在步长
+    // 如果没有 "," 说明不存在步长，步长默认为 1
+    std::unique_ptr<ExprAST> Step;
+    if (CurTok == ',') {
+        getNextToken();
+        Step = ParseExpression();
+        if (!Step)
+        return nullptr;
+    }
+
+    if (CurTok != tok_in)
+        return LogError("expected 'in' after for");
+    // 消耗掉 "in".
+    getNextToken();
+
+    // 解析 for/in 循环体
+    auto Body = ParseExpression();
+    if (!Body)
+        return nullptr;
+
+    return std::make_unique<ForExprAST>(IdName, std::move(Start), std::move(End),
+                                        std::move(Step), std::move(Body));
+}
 
 /// primary
 ///   ::= identifierexpr
@@ -396,6 +468,8 @@ static std::unique_ptr<ExprAST> ParsePrimary() {
         return ParseParenExpr();
     case tok_if:
         return ParseIfExpr();
+    case tok_for:
+        return ParseForExpr();
     }
 }
 
@@ -705,12 +779,14 @@ Value *IfExprAST::codegen() {
     // 以确保在 PHINode 中正确地合并 else 子句和 then 子句的结果
     ElseBB = Builder->GetInsertBlock();
 
-    // Emit merge block.
     // 将 merge 基本块插入到当前函数的基本块列表中，并将代码生成器的插入点设置为 merge 基本块的末尾
     TheFunction->insert(TheFunction->end(), MergeBB);
     // 在 merge 基本块中生成 PHI 指令，用于合并 then/else 语句的计算结果
     // PHINode 是 LLVM IR 中的一种特殊指令，用于合并多个基本块中的值。
     // PHINode 概念 https://en.wikipedia.org/wiki/Static_single-assignment_form
+    // 简短版解释：Phi操作的“执行”需要“记住”控制权来自哪个块。
+    // 在这种情况下，如果控制权来自“then”块，它将获得“calltmp”的值。
+    // 如果控制来自“else”块，则它获取“calltmp1”的值
     Builder->SetInsertPoint(MergeBB);
     PHINode *PN = Builder->CreatePHI(Type::getDoubleTy(*TheContext), 2, "iftmp");
 
@@ -719,6 +795,101 @@ Value *IfExprAST::codegen() {
     PN->addIncoming(ElseV, ElseBB);
     // 返回 PHI 指令
     return PN;
+}
+
+// Output for-loop as:
+//   ...
+//   start = startexpr
+//   goto loop
+// loop:
+//   variable = phi [start, loopheader], [nextvariable, loopend]
+//   ...
+//   bodyexpr
+//   ...
+// loopend:
+//   step = stepexpr
+//   nextvariable = variable + step
+//   endcond = endexpr
+//   br endcond, loop, endloop
+// outloop:
+Value *ForExprAST::codegen() {
+    // Emit the start code first, without 'variable' in scope.
+    // 生成循环变量的初始值
+    Value *StartVal = Start->codegen();
+    if (!StartVal)
+        return nullptr;
+
+    // 创建一个新的基本块 LoopBB，用于循环头，它将成为当前基本块的后继基本块
+    Function *TheFunction = Builder->GetInsertBlock()->getParent();
+    BasicBlock *PreheaderBB = Builder->GetInsertBlock();
+    BasicBlock *LoopBB = BasicBlock::Create(*TheContext, "loop", TheFunction);
+
+    // 在当前基本块的末尾插入一个无条件分支指令，跳转到 LoopBB 基本块
+    Builder->CreateBr(LoopBB);
+
+    // 生成器(Builder)的插入点设置为刚刚创建的新基本块 LoopBB，以便在这个基本块中继续生成代码
+    Builder->SetInsertPoint(LoopBB);
+
+    // 将 PHI 节点的起始值设置为 Start
+    PHINode *Variable = Builder->CreatePHI(Type::getDoubleTy(*TheContext), 2, VarName);
+    Variable->addIncoming(StartVal, PreheaderBB);
+
+    // 保存当前循环变量的值，以便在循环结束后使用
+    Value *OldVal = NamedValues[VarName];
+    // 把当前 PHINode 节点的值保存到符号表中
+    NamedValues[VarName] = Variable;
+
+    // 生成循环体的代码
+    if (!Body->codegen())
+        return nullptr;
+
+    // 生成循环变量的步长
+    Value *StepVal = nullptr;
+    if (Step) {
+        StepVal = Step->codegen();
+        if (!StepVal)
+        return nullptr;
+    } else {
+        // If not specified, use 1.0.
+        StepVal = ConstantFP::get(*TheContext, APFloat(1.0));
+    }
+
+    // 生成下一次循环变量的值
+    Value *NextVar = Builder->CreateFAdd(Variable, StepVal, "nextvar");
+
+    // 生成循环结束的条件
+    Value *EndCond = End->codegen();
+    if (!EndCond)
+        return nullptr;
+
+    // 将条件表达式转换为布尔值 EndCond = (EndCond != 0.0)
+    EndCond = Builder->CreateFCmpONE(
+        EndCond, ConstantFP::get(*TheContext, APFloat(0.0)), "loopcond");
+
+    // 创建一个新的基本块 AfterBB，用于循环结束后的代码，它将成为当前基本块的后继基本块
+    BasicBlock *LoopEndBB = Builder->GetInsertBlock();
+    BasicBlock *AfterBB =
+        BasicBlock::Create(*TheContext, "afterloop", TheFunction);
+
+    // 在当前基本块的末尾插入一个条件分支指令，根据 EndCond 的值决定跳转到 LoopBB 还是 AfterBB
+    Builder->CreateCondBr(EndCond, LoopBB, AfterBB);
+
+    // 生成器(Builder)的插入点设置为刚刚创建的新基本块 AfterBB，以便在这个基本块中继续生成代码
+    Builder->SetInsertPoint(AfterBB);
+
+    // 添加一个新条目到 PHI 节点中，用于保存循环结束后的值
+    Variable->addIncoming(NextVar, LoopEndBB);
+
+    // 如果当前循环变量的值在循环体中被覆盖了，则需要将其恢复
+    if (OldVal)
+        NamedValues[VarName] = OldVal;
+    else
+        // 如果当前循环变量的值没有被覆盖，则从符号表中删除该变量
+        // 这样它就不在 for 循环之后的作用域中了
+        NamedValues.erase(VarName);
+
+    // for 循环的返回值为 0.0
+    return Constant::getNullValue(Type::getDoubleTy(*TheContext));
 }
 
 
