@@ -35,3 +35,11 @@ clang++ -g adding-control-flow.cpp `llvm-config --cxxflags --ldflags --system-li
 
 ./toy
 ```
+
+**chapter 6**
+
+```bash
+clang++ -g adding-control-flow.cpp ``llvm-config --cxxflags --ldflags --system-libs --libs core orcjit native` -O3 -o toy
+
+./toy
+```
