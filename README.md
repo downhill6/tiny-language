@@ -102,3 +102,32 @@ ready> Evaluated to 1.000000
 ready> 1 & 0;
 ready> Evaluated to 0.000000
 ```
+
+**chapter 7**
+
+```bash
+clang++ -g mutable-variables.cpp `llvm-config --cxxflags --ldflags --system-libs --libs core orcjit native` -O3 -o toy
+
+./toy
+```
+
+使用变量
+
+```
+ready> var a = 1, b = 2 in (a + b);
+ready> Evaluated to 3.000000
+
+def binary : 1 (x y) y;
+
+# Iterative fib.
+def fibi(x)
+  var a = 1, b = 1, c in
+  (for i = 3, i < x in
+     c = a + b :
+     a = b :
+     b = c) :
+  b;
+
+# Call it.
+fibi(10);
+```
