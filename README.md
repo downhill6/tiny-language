@@ -131,3 +131,46 @@ def fibi(x)
 # Call it.
 fibi(10);
 ```
+
+**chapter 8**
+
+```bash
+clang++ -g -O3 toy.cpp `llvm-config --cxxflags --ldflags --system-libs --libs all` -o toy
+
+./toy
+```
+
+把在 REPL 输入的代码编译到目标文件
+
+```
+./toy
+ready> def average(x y) (x + y) * 0.5;
+^D
+Wrote output.o
+```
+
+测试目标文件
+
+```c++
+// test.cpp
+#include <iostream>
+
+extern "C" {
+    double average(double, double);
+}
+
+int main() {
+    std::cout << "average of 3.0 and 4.0: " << average(3.0, 4.0) << std::endl;
+}
+```
+
+把 `test.cpp` 链接到 `outpue.o`, 执行查看结果
+
+```bash
+clang++ test.cpp output.o -o test
+
+./test
+
+# 输出
+Average of 3.0 and 4.0 is 3.5
+```
